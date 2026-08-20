@@ -38,31 +38,31 @@ s3-smoke = []
 
 [dependencies]
 anyhow = "1"
-aisle = { version = "0.2.1", git = "https://github.com/sachaw/aisle", rev = "05c80c2c2498bb887df492bc62ea7e5e9481120b" }
-arrow-array = "58"
-arrow-buffer = "58"
-arrow-ipc = "58"
-arrow-schema = { version = "58", features = ["serde"] }
-arrow-select = "58"
+aisle = { version = "0.2.1", git = "https://github.com/sachaw/aisle", rev = "1fc571b049b653fbae1b7d4fe3af138f5c8b8c98" }
+arrow-array = "59"
+arrow-buffer = "59"
+arrow-ipc = "59"
+arrow-schema = { version = "59", features = ["serde"] }
+arrow-select = "59"
 bytes = "1"
 crc32c = "0.6"
 crossbeam-skiplist = "0.1"
-datafusion-common = "54"
-fusio = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "f444aee8a7dcbc43264d70770909439054efdc0c", default-features = false, features = [
+datafusion-common = "55"
+fusio = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "d244fd501eeb00f372d93420421f98620bcafb87", default-features = false, features = [
     "aws",
     "dyn",
     "executor",
     "fs",
 ] }
-fusio-manifest = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "f444aee8a7dcbc43264d70770909439054efdc0c", package = "fusio-manifest", default-features = false, features = [
+fusio-manifest = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "d244fd501eeb00f372d93420421f98620bcafb87", package = "fusio-manifest", default-features = false, features = [
     "std",
 ] }
-fusio-parquet = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "f444aee8a7dcbc43264d70770909439054efdc0c", package = "fusio-parquet" }
+fusio-parquet = { version = "0.6.1", git = "https://github.com/sachaw/fusio", rev = "d244fd501eeb00f372d93420421f98620bcafb87", package = "fusio-parquet" }
 futures = "0.3"
 lockable = "0.2"
 once_cell = "1"
 parking_lot = "0.12"
-parquet = { version = "58", default-features = false, features = [
+parquet = { version = "59", default-features = false, features = [
     "async",
     "zstd",
 ] }
@@ -80,8 +80,8 @@ tokio = { version = "1", default-features = false, features = [
     "sync",
     "time",
 ], optional = true }
-typed-arrow = { version = "0.7.1", default-features = false, features = ["arrow-58", "ext-hooks", "views"], optional = true }
-typed-arrow-dyn = { version = "0.0.8", default-features = false, features = ["arrow-58", "serde"] }
+typed-arrow = { version = "0.7.1", git = "https://github.com/sachaw/typed-arrow", rev = "6c3e0da793aa0c1bddfe4d4b0d45f651db759426", default-features = false, features = ["arrow-59", "ext-hooks", "views"], optional = true }
+typed-arrow-dyn = { version = "0.0.8", git = "https://github.com/sachaw/typed-arrow", rev = "6c3e0da793aa0c1bddfe4d4b0d45f651db759426", default-features = false, features = ["arrow-59", "serde"] }
 ulid = { version = "1", features = ["serde"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -96,7 +96,7 @@ futures = "0.3"
 tempfile = "3"
 tracing = { version = "0.1", default-features = false, features = ["attributes", "std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-typed-arrow = { version = "0.7.1", default-features = false, features = ["arrow-58", "ext-hooks", "views"] }
+typed-arrow = { version = "0.7.1", git = "https://github.com/sachaw/typed-arrow", rev = "6c3e0da793aa0c1bddfe4d4b0d45f651db759426", default-features = false, features = ["arrow-59", "ext-hooks", "views"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5"
