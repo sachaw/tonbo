@@ -1402,7 +1402,7 @@ async fn write_parquet_data(
         .await
         .expect("open parquet file");
     let props = WriterProperties::builder()
-        .set_max_row_group_size(row_group_size)
+        .set_max_row_group_row_count(Some(row_group_size))
         .set_data_page_row_count_limit(page_row_limit)
         .set_write_batch_size(page_row_limit)
         .set_statistics_enabled(EnabledStatistics::Page)

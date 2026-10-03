@@ -934,7 +934,7 @@ fn writer_properties(config: &SsTableConfig, schema: &SchemaRef) -> WriterProper
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_offset_index_disabled(false)
         .set_data_page_size_limit(SST_DATA_PAGE_SIZE_LIMIT)
-        .set_max_row_group_size(config.max_row_group_rows());
+        .set_max_row_group_row_count(Some(config.max_row_group_rows()));
     for column in bloom_filter_columns(config, schema) {
         builder = builder.set_column_bloom_filter_enabled(column, true);
     }
@@ -1556,7 +1556,7 @@ where
         .load_and_finish(&mut reader, size)
         .await
         .map_err(SsTableError::Parquet)?;
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata =
         ArrowReaderMetadata::try_new(Arc::new(metadata), options).map_err(SsTableError::Parquet)?;
     let file_schema = arrow_metadata.schema();
@@ -1754,7 +1754,7 @@ where
     let reader = AsyncReader::new(file, size, UnpinExec(executor))
         .await
         .map_err(SsTableError::Fs)?;
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata =
         ArrowReaderMetadata::try_new(metadata, options).map_err(SsTableError::Parquet)?;
     let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_metadata);
@@ -1831,7 +1831,7 @@ where
         .map_err(SsTableError::Parquet)?;
     validate_page_indexes(&path, &metadata)?;
 
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata =
         ArrowReaderMetadata::try_new(Arc::new(metadata), options).map_err(SsTableError::Parquet)?;
     let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_metadata);

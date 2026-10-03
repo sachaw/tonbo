@@ -391,7 +391,7 @@ where
         ctx.executor.clone(),
     )
     .await?;
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&metadata), options)
         .map_err(SsTableError::Parquet)?;
     let schema = arrow_metadata.schema();
@@ -525,7 +525,7 @@ fn reproject_sst_selection(
     scan_schema: &SchemaRef,
     key_schema: &SchemaRef,
 ) -> Result<(), SsTableError> {
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&selection.metadata), options)
         .map_err(SsTableError::Parquet)?;
     let (projection, projected_schema) =
@@ -567,7 +567,7 @@ where
     E: Executor + Clone + 'static,
 {
     let metadata = parquet_metadata_cached(fs, delete_path, metadata_cache, executor).await?;
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
     let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&metadata), options)
         .map_err(SsTableError::Parquet)?;
     let file_schema = arrow_metadata.schema();
