@@ -41,7 +41,7 @@ pub use builder::{
 };
 pub use error::DBError;
 pub use scan::{DEFAULT_SCAN_BATCH_ROWS, ScanBuilder, ScanSetupProfile};
-pub(crate) use wal::{TxnWalPublishContext, WalFrameRange};
+pub(crate) use wal::{TxnWalPublishContext, WalFrameRange, WalWriteInFlight};
 
 #[cfg(not(test))]
 use crate::observability::log_warn;
@@ -775,6 +775,9 @@ where
     snapshot_pins: Arc<SnapshotPinRegistry>,
     /// WAL frame bounds covering the current mutable memtable, if any.
     mutable_wal_range: Arc<Mutex<Option<WalFrameRange>>>,
+    /// Writes between their WAL append and recording its frames as live. While
+    /// any is, a flush cannot tell which frames are live, so it keeps the floor.
+    wal_writes_in_flight: Arc<std::sync::atomic::AtomicUsize>,
     /// Per-key transactional locks (wired once transactional writes arrive).
     _key_locks: LockMap<KeyOwned>,
     /// Optional background compaction worker handle.
@@ -846,6 +849,9 @@ where
     snapshot_pins: Arc<SnapshotPinRegistry>,
     /// WAL frame bounds covering the current mutable memtable, if any.
     mutable_wal_range: Arc<Mutex<Option<WalFrameRange>>>,
+    /// Writes between their WAL append and recording its frames as live. While
+    /// any is, a flush cannot tell which frames are live, so it keeps the floor.
+    wal_writes_in_flight: Arc<std::sync::atomic::AtomicUsize>,
     /// Per-key transactional locks (wired once transactional writes arrive).
     _key_locks: LockMap<KeyOwned>,
     /// Optional background compaction worker handle.
@@ -989,6 +995,7 @@ where
             metadata_cache: default_parquet_metadata_cache::<E>(),
             snapshot_pins: Arc::new(SnapshotPinRegistry::default()),
             mutable_wal_range: Arc::new(Mutex::new(None)),
+            wal_writes_in_flight: Arc::default(),
             _key_locks: Arc::new(LockableHashMap::new()),
             compaction_worker: None,
             compaction_metrics: None,
@@ -1123,7 +1130,9 @@ where
 
         let commit_ts = self.next_commit_ts();
         let mut wal_spans: Vec<(u64, u64)> = Vec::new();
+        let mut in_flight = None;
         if let Some(handle) = self.wal_handle().cloned() {
+            in_flight = Some(self.wal_write_in_flight());
             let provisional_id = handle.next_provisional_id();
             let append_ticket = handle
                 .txn_append(provisional_id, &batch, commit_ts)
@@ -1144,6 +1153,7 @@ where
         for (first, last) in wal_spans {
             self.observe_mutable_wal_span(first, last);
         }
+        drop(in_flight);
         self.insert_into_mutable(batch, commit_ts)?;
         self.maybe_seal_after_insert()?;
         if run_minor_compaction {
@@ -1522,12 +1532,15 @@ where
             // dedup remains deterministic across reopen/recovery boundaries.
             builder.add_immutable(seg)?;
         }
-        let existing_floor = self.manifest_wal_floor().await;
-        let live_floor = self.mutable_wal_range_snapshot().map(|range| range.first);
+        let held = self
+            .manifest_wal_floor()
+            .await
+            .map(|floor| floor.first_frame());
+        // What stays live once this flush lands: every immutable after the ones
+        // it takes, and the mutable memtable.
+        let live_floor = || self.unflushed_wal_floor(flush_count, held);
         let (wal_ids, wal_refs) = if let Some(cfg) = &self.wal_config {
-            match manifest_ext::collect_wal_segment_refs(cfg, existing_floor.as_ref(), live_floor)
-                .await
-            {
+            match manifest_ext::collect_wal_segment_refs(cfg, live_floor).await {
                 Ok(refs) => {
                     let wal_ids = if refs.is_empty() {
                         builder.set_wal_ids(None);

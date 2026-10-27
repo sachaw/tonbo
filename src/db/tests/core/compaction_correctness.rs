@@ -1361,7 +1361,17 @@ async fn compaction_correctness_delete_only_sst_reopen_and_compact()
     .await?;
 
     harness.reopen().await?;
-    let reopened = harness.db.snapshot_at(Timestamp::new(snapshot_ts)).await?;
+    // Nothing is written after `snapshot_ts`, so the reopened head is the state
+    // at it. Not `snapshot_at(snapshot_ts)`: that takes a manifest version's
+    // timestamp, and here two flushes put `k02` in the second version, so
+    // version 1 under-reads. It only passed while the open replayed the whole
+    // WAL, flushed or not, back into the memtable.
+    let reopened = harness.db.begin_snapshot().await?;
+    assert_eq!(
+        reopened.read_view().read_ts().get(),
+        snapshot_ts,
+        "the commit clock survives"
+    );
     assert_oracle_matches(scenario, snapshot_ts, &reopened, &oracle, &harness.db, None).await?;
     assert_range_matches(
         scenario,
@@ -1386,7 +1396,7 @@ async fn compaction_correctness_delete_only_sst_reopen_and_compact()
         "scenario={scenario} expected compaction to add SSTs"
     );
 
-    let post_snapshot = harness.db.snapshot_at(Timestamp::new(snapshot_ts)).await?;
+    let post_snapshot = harness.db.begin_snapshot().await?;
     assert_oracle_matches(
         scenario,
         snapshot_ts,

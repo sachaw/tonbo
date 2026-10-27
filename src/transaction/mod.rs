@@ -634,6 +634,7 @@ where
         if let Some(wal) = db.wal_handle().cloned() {
             let provisional_id = wal.next_provisional_id();
             let prev_live_floor = db.wal_live_frame_floor();
+            let in_flight = db.wal_write_in_flight();
             let upsert_refs = upsert_payload.as_ref();
             let delete_ref = delete_payload.as_ref();
             let tickets =
@@ -647,6 +648,7 @@ where
                     // Record WAL range BEFORE apply that may trigger auto-seal.
                     // If we record after, a sealed segment would miss this transaction's frames.
                     publish_ctx.record_wal_range(&wal_range);
+                    drop(in_flight);
                     apply_staged_payloads(
                         &*db,
                         upsert_payload.take(),
@@ -664,7 +666,7 @@ where
                     )?;
                     let publish_ctx = db.txn_publish_context(prev_live_floor);
                     let executor = Arc::clone(db.executor());
-                    spawn_publish_task(executor, Arc::clone(&db), publish_ctx, tickets);
+                    spawn_publish_task(executor, Arc::clone(&db), publish_ctx, tickets, in_flight);
                     maintenance_deferred = true;
                 }
             }
@@ -1364,6 +1366,7 @@ fn spawn_publish_task<FS, E>(
     db: Arc<DbInner<FS, E>>,
     publish_ctx: TxnWalPublishContext<FS, E>,
     tickets: WalTxnTickets<E>,
+    in_flight: crate::db::WalWriteInFlight,
 ) where
     FS: crate::manifest::ManifestFs<E>,
     E: Executor + Timer + Clone + 'static,
@@ -1373,6 +1376,7 @@ fn spawn_publish_task<FS, E>(
         match tickets.await_range().await {
             Ok(range) => {
                 publish_ctx.record_wal_range(&range);
+                drop(in_flight);
                 if let Err(err) = run_post_commit_maintenance(&db).await {
                     eprintln!("transaction post-commit maintenance failed: {err}");
                 }
@@ -1431,7 +1435,10 @@ where
             .wal_floor(self.manifest_table)
             .await
             .map_err(TransactionCommitError::Manifest)?;
-        let refs = manifest_ext::collect_wal_segment_refs(cfg, existing_floor.as_ref(), live_floor)
+        // A flush since this transaction began may have moved the floor past
+        // `prev_live_floor`; it is never moved back.
+        let held = existing_floor.as_ref().map(|floor| floor.first_frame());
+        let refs = manifest_ext::collect_wal_segment_refs(cfg, || live_floor.max(held))
             .await
             .map_err(TransactionCommitError::Wal)?;
         if refs.is_empty() {

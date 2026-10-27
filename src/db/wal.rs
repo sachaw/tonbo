@@ -33,6 +33,24 @@ fn duration_ns_u64(duration: std::time::Duration) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+/// The earlier of two frames, either of which may be absent.
+fn earliest(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// A write between its WAL append and recording its frames as live; see
+/// [`DbInner::wal_write_in_flight`].
+pub(crate) struct WalWriteInFlight(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for WalWriteInFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WalFrameRange {
     pub(crate) first: u64,
@@ -144,8 +162,7 @@ where
         commit_ts: Timestamp,
     ) -> Result<(), KeyExtractError> {
         if let Some(sealed) = self.mem.insert_batch(batch, commit_ts)? {
-            let wal_range = self.take_mutable_wal_range();
-            self.add_immutable(sealed, wal_range);
+            self.seal_into_immutable(sealed);
             let mut seal = self.seal_state_lock();
             seal.last_seal_at = Some(self.executor.now());
         }
@@ -154,8 +171,7 @@ where
 
     fn seal_mutable_now(&self) -> Result<(), KeyExtractError> {
         if let Some(seg) = self.mem.seal_now()? {
-            let wal_range = self.take_mutable_wal_range();
-            self.add_immutable(seg, wal_range);
+            self.seal_into_immutable(seg);
             let mut seal = self.seal_state_lock();
             seal.last_seal_at = Some(self.executor.now());
         }
@@ -177,8 +193,7 @@ where
         batch: RecordBatch,
     ) -> Result<(), KeyExtractError> {
         if let Some(sealed) = self.mem.insert_delete_batch(batch)? {
-            let wal_range = self.take_mutable_wal_range();
-            self.add_immutable(sealed, wal_range);
+            self.seal_into_immutable(sealed);
             let mut seal = self.seal_state_lock();
             seal.last_seal_at = Some(self.executor.now());
         }
@@ -383,20 +398,41 @@ where
     }
 
     pub(crate) fn wal_live_frame_floor(&self) -> Option<u64> {
-        let mutable_floor = self.mutable_wal_range_snapshot().map(|range| range.first);
-        let seal = self.seal_state_lock();
-        let immutable_floor = seal
-            .immutable_wal_ranges
-            .iter()
-            .filter_map(|range| range.as_ref().map(|r| r.first))
-            .min();
+        self.unflushed_wal_floor(0, None)
+    }
 
-        match (mutable_floor, immutable_floor) {
-            (Some(lhs), Some(rhs)) => Some(lhs.min(rhs)),
-            (Some(lhs), None) => Some(lhs),
-            (None, Some(rhs)) => Some(rhs),
-            (None, None) => None,
+    /// The oldest WAL frame not yet in an SST once the oldest `flushed`
+    /// immutables are, or `None` when every frame written is.
+    ///
+    /// Read under the seal lock, which is where a sealed memtable hands its
+    /// frames to its immutable ([`Self::seal_into_immutable`]), so no frame is
+    /// missed between the two. `held` is the floor already published: a frame
+    /// this cannot place (an immutable sealed without a range, a write between
+    /// its WAL append and recording its frames) keeps the floor where it is.
+    pub(crate) fn unflushed_wal_floor(&self, flushed: usize, held: Option<u64>) -> Option<u64> {
+        let seal = self.seal_state_lock();
+        let held = || Some(held.unwrap_or(crate::wal::frame::INITIAL_FRAME_SEQ));
+        let mut floor = self.mutable_wal_range_snapshot().map(|range| range.first);
+        for range in seal.immutable_wal_ranges.iter().skip(flushed) {
+            let first = range.as_ref().map(|r| r.first).or_else(held);
+            floor = earliest(floor, first);
         }
+        if self
+            .wal_writes_in_flight
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            floor = earliest(floor, held());
+        }
+        floor
+    }
+
+    /// Count a write as in flight from before its WAL append until the guard
+    /// drops, after its frames are recorded as live.
+    pub(crate) fn wal_write_in_flight(&self) -> WalWriteInFlight {
+        self.wal_writes_in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        WalWriteInFlight(Arc::clone(&self.wal_writes_in_flight))
     }
 
     pub(crate) fn txn_publish_context(
@@ -424,6 +460,18 @@ where
         self.record_mutable_wal_range(WalFrameRange { first, last });
     }
 
+    /// Freeze `seg` as the newest immutable, with the WAL frames the mutable
+    /// memtable covered. The range moves under the seal lock, so whoever reads the
+    /// live frames under it sees them on one side or the other, never on neither.
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub(crate) fn seal_into_immutable(&self, seg: ImmutableSegment) {
+        let mut seal = self.seal_state_lock();
+        let wal_range = self.take_mutable_wal_range();
+        seal.immutables.push(Arc::new(seg));
+        seal.immutable_wal_ranges.push(wal_range);
+    }
+
+    #[cfg(test)]
     #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn add_immutable(&self, seg: ImmutableSegment, wal_range: Option<WalFrameRange>) {
         let mut seal = self.seal_state_lock();
@@ -506,7 +554,9 @@ where
         ..WritePathProfile::default()
     };
     let mut wal_range: Option<WalFrameRange> = None;
+    let mut in_flight = None;
     if let Some(handle) = db.wal_handle().cloned() {
+        in_flight = Some(db.wal_write_in_flight());
         let provisional_id = handle.next_provisional_id();
         let append_submit_started = Instant::now();
         let mut append_tickets = Vec::new();
@@ -565,18 +615,17 @@ where
         if let Some(range) = wal_range {
             db.record_mutable_wal_range(range);
         }
+        drop(in_flight);
         let mutable_insert_started = Instant::now();
         if let Some(batch) = upsert_batch
             && let Some(sealed) = db.mem.insert_batch(batch, commit_ts)?
         {
-            let wal_range_take = db.take_mutable_wal_range();
-            db.add_immutable(sealed, wal_range_take);
+            db.seal_into_immutable(sealed);
         }
         if let Some(batch) = delete_batch
             && let Some(sealed) = db.mem.insert_delete_batch(batch)?
         {
-            let wal_range_take = db.take_mutable_wal_range();
-            db.add_immutable(sealed, wal_range_take);
+            db.seal_into_immutable(sealed);
         }
         profile.mutable_insert_ns = duration_ns_u64(mutable_insert_started.elapsed());
         let seal_started = Instant::now();
@@ -647,8 +696,7 @@ where
     }
 
     if let Some(sealed) = db.mem.insert_batch_with_mvcc(batch, commit_array)? {
-        let wal_range = db.take_mutable_wal_range();
-        db.add_immutable(sealed, wal_range);
+        db.seal_into_immutable(sealed);
     }
     Ok(())
 }
@@ -666,8 +714,7 @@ where
     validate_delete_batch_schema(db, &batch)?;
     validate_delete_commit_ts(&batch, commit_ts)?;
     if let Some(sealed) = db.mem.insert_delete_batch(batch)? {
-        let wal_range = db.take_mutable_wal_range();
-        db.add_immutable(sealed, wal_range);
+        db.seal_into_immutable(sealed);
     }
     Ok(())
 }

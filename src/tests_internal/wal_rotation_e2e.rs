@@ -92,7 +92,7 @@ async fn wal_rotation_and_state_persisted() -> Result<(), Box<dyn std::error::Er
     // Ensure writer drains and state is flushed.
     db.disable_wal().await?;
 
-    // Expect multiple WAL segment files on disk.
+    // The WAL segment files on disk.
     let wal_files: Vec<_> = fs::read_dir(&wal_dir)?
         .flatten()
         .filter(|entry| {
@@ -100,9 +100,13 @@ async fn wal_rotation_and_state_persisted() -> Result<(), Box<dyn std::error::Er
                 && entry.file_name().to_string_lossy().ends_with(".tonwal")
         })
         .collect();
-    assert!(
-        wal_files.len() >= 2,
-        "expected wal rotation to produce multiple segments"
+    // Every batch was flushed as it landed, so the segments rotated out are
+    // below the floor and pruned: only the newest is left. That it rotated at
+    // all is the state's segment sequence, below.
+    assert_eq!(
+        wal_files.len(),
+        1,
+        "expected the flushed segments to be pruned"
     );
 
     // State store should record the latest segment sequence to allow recovery.
@@ -114,7 +118,7 @@ async fn wal_rotation_and_state_persisted() -> Result<(), Box<dyn std::error::Er
     );
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
 
     Ok(())
