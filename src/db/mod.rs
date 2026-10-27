@@ -984,6 +984,7 @@ where
         executor: Arc<E>,
     ) -> Self {
         let now = executor.now();
+        let snapshot_pins = manifest.snapshot_pins();
         Self {
             schema,
             delete_schema,
@@ -1003,7 +1004,7 @@ where
             bloom_cache: default_bloom_cache::<E>(),
             pruner_cache: Arc::new(E::mutex(HashMap::new())),
             metadata_cache: default_parquet_metadata_cache::<E>(),
-            snapshot_pins: Arc::new(SnapshotPinRegistry::default()),
+            snapshot_pins,
             mutable_wal_range: Arc::new(Mutex::new(None)),
             wal_writes_in_flight: Arc::default(),
             _key_locks: Arc::new(LockableHashMap::new()),

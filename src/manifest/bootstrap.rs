@@ -25,6 +25,7 @@ use super::{
     version::VersionEdit,
 };
 use crate::{
+    db::SnapshotPinRegistry,
     id::FileIdGenerator,
     mvcc::Timestamp,
     observability::{log_debug, log_info},
@@ -82,6 +83,9 @@ where
     version: ManifestInstance<VersionCodec, FS, E>,
     catalog: ManifestInstance<CatalogCodec, FS, E>,
     gc_plan: ManifestInstance<GcPlanCodec, FS, E>,
+    /// The versions live snapshots read: what the version history keeps past
+    /// its window, and what SST GC protects.
+    pins: Arc<SnapshotPinRegistry>,
 }
 
 impl<FS, E> Clone for TonboManifest<FS, E>
@@ -99,6 +103,7 @@ where
             version: self.version.clone(),
             catalog: self.catalog.clone(),
             gc_plan: self.gc_plan.clone(),
+            pins: Arc::clone(&self.pins),
         }
     }
 }
@@ -122,7 +127,13 @@ where
             version,
             catalog,
             gc_plan,
+            pins: Arc::default(),
         }
+    }
+
+    /// The registry of versions live snapshots read.
+    pub(crate) fn snapshot_pins(&self) -> Arc<SnapshotPinRegistry> {
+        Arc::clone(&self.pins)
     }
 
     pub(crate) async fn apply_version_edits(
@@ -130,7 +141,9 @@ where
         table: TableId,
         edits: &[VersionEdit],
     ) -> ManifestResult<Timestamp> {
-        self.version.apply_version_edits(table, edits).await
+        self.version
+            .apply_version_edits(table, edits, &self.pins.active_versions())
+            .await
     }
 
     pub(crate) async fn apply_version_edits_cas(
@@ -140,7 +153,7 @@ where
         edits: &[VersionEdit],
     ) -> ManifestResult<Timestamp> {
         self.version
-            .apply_version_edits_cas(table, expected_head, edits)
+            .apply_version_edits_cas(table, expected_head, edits, &self.pins.active_versions())
             .await
     }
 
@@ -203,6 +216,7 @@ where
                 schema_version: meta.schema_version,
                 wal_floor: None,
                 last_manifest_txn: None,
+                history: Vec::new(),
             },
         )
         .await?;
@@ -399,6 +413,7 @@ where
                 schema_version,
                 wal_floor: None,
                 last_manifest_txn: None,
+                history: Vec::new(),
             },
         )
         .await?;

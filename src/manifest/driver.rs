@@ -104,6 +104,27 @@ impl<HS, SS, CS, LS> Stores<HS, SS, CS, LS> {
     }
 }
 
+/// How many log segments may follow a manifest's checkpoint before a commit
+/// folds them in. An open reads at most this many besides the checkpoint.
+pub(crate) const CHECKPOINT_TAIL: u64 = 32;
+
+/// How many committed versions of a table its manifest keeps: the window
+/// [`list_versions`](Manifest::list_versions) and time travel reach back over.
+/// A version a live snapshot pins is kept past it until the pin is released.
+pub(crate) const VERSION_HISTORY: usize = 16;
+
+/// A write session on a manifest of codec `C`.
+type WriteSession<C, HS, SS, CS, LS, E> = fusio_manifest::session::WriteSession<
+    <C as ManifestCodec>::Key,
+    <C as ManifestCodec>::Value,
+    HS,
+    SS,
+    CS,
+    LS,
+    E,
+    DefaultRetention,
+>;
+
 /// Manifest wrapper parameterized by the codec describing its key/value types.
 pub(super) struct Manifest<C, HS, SS, CS, LS, E = fusio_manifest::DefaultExecutor>
 where
@@ -142,6 +163,38 @@ where
             ),
         }
     }
+
+    /// Commit `session`, and fold the log into its checkpoint once the tail
+    /// past it is [`CHECKPOINT_TAIL`] segments long.
+    ///
+    /// The log is every commit ever made until something checkpoints it, and
+    /// an open reads all of it: a table flushed every few seconds for a week
+    /// held 4,439 segments and 6.2 GB, and took 13.5 s to open. Checkpointed
+    /// here, an open reads the checkpoint's runs and at most a tail's worth of
+    /// segments, whatever the table's age.
+    ///
+    /// The commit stands whatever the checkpoint does: a failed one is retried
+    /// by the next commit that finds the tail long.
+    async fn commit(&self, session: WriteSession<C, HS, SS, CS, LS, E>) -> ManifestResult<()> {
+        let outcome = session.commit().await?;
+        let folded = outcome.head.merge_tree.compacted_segment_seq.unwrap_or(0);
+        let tail = outcome
+            .head
+            .last_segment_seq
+            .unwrap_or(0)
+            .saturating_sub(folded);
+        if tail >= CHECKPOINT_TAIL
+            && let Err(err) = self.inner.compactor().compact_and_gc().await
+        {
+            log_warn!(
+                component = "manifest",
+                event = "manifest_checkpoint_failed",
+                tail_segments = tail,
+                error = %err,
+            );
+        }
+        Ok(())
+    }
 }
 
 impl<HS, SS, CS, LS, E> Manifest<VersionCodec, HS, SS, CS, LS, E>
@@ -153,14 +206,17 @@ where
     E: Executor + Timer + Clone + 'static,
 {
     /// Apply a sequence of edits, atomically publishing a new table version together with head
-    /// metadata.
+    /// metadata. `pinned` are the versions live snapshots hold: kept past
+    /// [`VERSION_HISTORY`] until released.
     #[allow(dead_code)]
     pub(crate) async fn apply_version_edits(
         &self,
         table: TableId,
         edits: &[VersionEdit],
+        pinned: &[Timestamp],
     ) -> ManifestResult<Timestamp> {
-        self.apply_version_edits_inner(table, edits, None).await
+        self.apply_version_edits_inner(table, edits, None, pinned)
+            .await
     }
 
     /// Apply edits with a CAS guard on the current head transaction. If the manifest head has
@@ -171,14 +227,15 @@ where
         table: TableId,
         expected_head: Option<Timestamp>,
         edits: &[VersionEdit],
+        pinned: &[Timestamp],
     ) -> ManifestResult<Timestamp> {
-        self.apply_version_edits_inner(table, edits, Some(expected_head))
+        self.apply_version_edits_inner(table, edits, Some(expected_head), pinned)
             .await
     }
 
     #[instrument(
         name = "manifest::apply_version_edits",
-        skip(self, edits),
+        skip(self, edits, pinned),
         fields(
             component = "manifest",
             table_id = ?table,
@@ -191,6 +248,7 @@ where
         table: TableId,
         edits: &[VersionEdit],
         expected_head: Option<Option<Timestamp>>,
+        pinned: &[Timestamp],
     ) -> ManifestResult<Timestamp> {
         if edits.is_empty() {
             return Err(ManifestError::Invariant("no version edits provided"));
@@ -272,9 +330,29 @@ where
             VersionValue::TableVersion(state),
         );
 
+        // The history this commit leaves: the newest VERSION_HISTORY, and
+        // any older a snapshot still pins. Every other version is retired.
+        // Each commit stores a whole version, naming every SST, so a history
+        // kept for ever grew with the square of the table's flush count.
+        let mut history = Vec::with_capacity(head.history.len() + 1);
+        history.push(next_txn);
+        history.extend(head.history.iter().copied());
+        let mut kept = Vec::with_capacity(history.len());
+        for (i, manifest_ts) in history.into_iter().enumerate() {
+            if i < VERSION_HISTORY || pinned.contains(&manifest_ts) {
+                kept.push(manifest_ts);
+            } else {
+                session.delete(VersionKey::TableVersion {
+                    table_id: table,
+                    manifest_ts,
+                });
+            }
+        }
+
         // Update table head with updated wal floor
         head.last_manifest_txn = Some(next_txn);
         head.wal_floor = wal_floor.clone();
+        head.history = kept;
 
         session.put(head_key, VersionValue::TableHead(head));
 
@@ -285,7 +363,7 @@ where
             None => session.delete(wal_key),
         }
 
-        session.commit().await?;
+        self.commit(session).await?;
         log_debug!(
             component = "manifest",
             event = "manifest_apply_committed",
@@ -423,7 +501,7 @@ where
             return Ok(());
         }
         session.put(key, VersionValue::TableHead(head));
-        session.commit().await?;
+        self.commit(session).await?;
         Ok(())
     }
 
@@ -597,7 +675,7 @@ where
             Some(plan) => session.put(key, GcPlanValue::Plan(plan)),
             None => session.delete(key),
         }
-        session.commit().await?;
+        self.commit(session).await?;
         Ok((previous, next))
     }
 
@@ -615,7 +693,7 @@ where
         let mut session = self.inner.session_write().await?;
         let key = GcPlanKey::Table { table_id };
         session.put(key, GcPlanValue::Plan(plan));
-        session.commit().await?;
+        self.commit(session).await?;
         Ok(())
     }
 
@@ -663,7 +741,7 @@ where
             return Ok(());
         }
         session.put(key, CatalogValue::Catalog(CatalogState::default()));
-        session.commit().await?;
+        self.commit(session).await?;
         Ok(())
     }
 
@@ -725,7 +803,7 @@ where
             CatalogKey::TableMeta { table_id },
             CatalogValue::TableMeta(meta.clone()),
         );
-        session.commit().await?;
+        self.commit(session).await?;
         Ok(meta)
     }
 
@@ -916,7 +994,7 @@ mod tests {
             VersionEdit::SetTombstoneWatermark { watermark: 99 },
         ];
         let first_txn = manifest
-            .apply_version_edits(table_id, &edits)
+            .apply_version_edits(table_id, &edits, &[])
             .await
             .expect("apply_version_edits should succeed");
         assert_eq!(
@@ -1015,7 +1093,7 @@ mod tests {
             VersionEdit::SetTombstoneWatermark { watermark: 111 },
         ];
         let second_txn = manifest
-            .apply_version_edits(table_id, &removal_edits)
+            .apply_version_edits(table_id, &removal_edits, &[])
             .await
             .expect("apply_version_edits should succeed when removing");
         assert_eq!(
@@ -1139,6 +1217,7 @@ mod tests {
                 &[VersionEdit::SetWalSegments {
                     segments: vec![wal_segment.clone()],
                 }],
+                &[],
             )
             .await
             .expect("initial wal segments should apply");
@@ -1159,6 +1238,7 @@ mod tests {
                 &[VersionEdit::SetWalSegments {
                     segments: Vec::new(),
                 }],
+                &[],
             )
             .await
             .expect("clearing wal segments should succeed");
@@ -1209,6 +1289,7 @@ mod tests {
                         Some(historical_delete.clone()),
                     )],
                 }],
+                &[],
             )
             .await
             .expect("first version");
@@ -1232,6 +1313,7 @@ mod tests {
                         )],
                     },
                 ],
+                &[],
             )
             .await
             .expect("second version");
@@ -1337,6 +1419,7 @@ mod tests {
                         None,
                     )],
                 }],
+                &[],
             )
             .await
             .expect_err("applying edits without a head should fail");
@@ -1349,7 +1432,7 @@ mod tests {
         }
 
         let empty_err = manifest
-            .apply_version_edits(table_id, &[])
+            .apply_version_edits(table_id, &[], &[])
             .await
             .expect_err("applying empty edit batch should fail");
         match empty_err {
@@ -1385,7 +1468,7 @@ mod tests {
         }];
 
         manifest
-            .apply_version_edits(table_id, &edits)
+            .apply_version_edits(table_id, &edits, &[])
             .await
             .expect("first apply");
 
@@ -1394,12 +1477,12 @@ mod tests {
         let expected_head = snapshot.head.last_manifest_txn;
 
         manifest
-            .apply_version_edits(table_id, &edits)
+            .apply_version_edits(table_id, &edits, &[])
             .await
             .expect("second apply");
 
         let err = manifest
-            .apply_version_edits_cas(table_id, expected_head, &edits)
+            .apply_version_edits_cas(table_id, expected_head, &edits, &[])
             .await
             .expect_err("cas conflict");
         assert!(matches!(err, ManifestError::CasConflict(_)));
@@ -1808,6 +1891,7 @@ mod tests {
                     schema_version: 1,
                     wal_floor: None,
                     last_manifest_txn: None,
+                    history: Vec::new(),
                 },
             )
             .await
@@ -1863,6 +1947,7 @@ mod tests {
                     schema_version: 1,
                     wal_floor: None,
                     last_manifest_txn: None,
+                    history: Vec::new(),
                 },
             )
             .await
@@ -1972,6 +2057,7 @@ mod tests {
                     schema_version: 1,
                     wal_floor: None,
                     last_manifest_txn: None,
+                    history: Vec::new(),
                 },
             )
             .await
@@ -2106,7 +2192,7 @@ mod tests {
                         let attempt_started_at = Instant::now();
                         let current_seq = seq.fetch_add(1, Ordering::Relaxed);
                         let edits = benchmark_edits(current_seq, &file_ids);
-                        match manifest.apply_version_edits(table_id, &edits).await {
+                        match manifest.apply_version_edits(table_id, &edits, &[]).await {
                             Ok(_) => {
                                 let logical_elapsed = logical_started_at
                                     .elapsed()

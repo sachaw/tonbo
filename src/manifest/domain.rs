@@ -445,6 +445,9 @@ pub(crate) struct TableHead {
     pub wal_floor: Option<WalSegmentRef>,
     /// Last manifest transaction identifier applied to the head.
     pub last_manifest_txn: Option<Timestamp>,
+    /// The versions the manifest holds, newest first: the last
+    /// `VERSION_HISTORY` committed, and any older one a snapshot pins.
+    pub history: Vec<Timestamp>,
 }
 
 /// Immutable version payload describing a committed state.
