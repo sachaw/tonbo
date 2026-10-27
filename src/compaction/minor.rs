@@ -76,6 +76,21 @@ impl MinorCompactor {
         if immutable_segments < self.segment_threshold {
             return Ok(None);
         }
+        self.flush(db, config).await.map(Some)
+    }
+
+    /// Flush every immutable now, whatever the threshold.
+    pub(crate) async fn flush<FS, E>(
+        &self,
+        db: &DbInner<FS, E>,
+        config: Arc<SsTableConfig>,
+    ) -> Result<SsTable, SsTableError>
+    where
+        FS: ManifestFs<E>,
+        E: Executor + Timer + Clone,
+        <FS as fusio::fs::Fs>::File: fusio::durability::FileCommit,
+    {
+        let immutable_segments = db.num_immutable_segments();
         log_info!(
             component = "compaction",
             event = "minor_compaction_start",
@@ -104,7 +119,7 @@ impl MinorCompactor {
                         target_level = self.target_level,
                     );
                 }
-                Ok(Some(table))
+                Ok(table)
             }
             Err(err) => {
                 log_warn!(

@@ -56,6 +56,29 @@ async fn open(dir: &std::path::Path) -> DB<LocalFs, TokioExecutor> {
         .unwrap()
 }
 
+/// A table that never flushes: everything it writes stays in its WAL.
+async fn open_unflushed(dir: &std::path::Path) -> DB<LocalFs, TokioExecutor> {
+    DbBuilder::from_schema_key_name(schema(), "id")
+        .unwrap()
+        .on_disk(dir)
+        .unwrap()
+        .wal_segment_bytes(16 << 10)
+        .disable_minor_compaction()
+        .open()
+        .await
+        .unwrap()
+}
+
+async fn rows(db: &DB<LocalFs, TokioExecutor>) -> usize {
+    db.scan()
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steady_ingest_keeps_the_wal_bounded() {
     let dir = tempfile::tempdir().unwrap();
@@ -102,4 +125,35 @@ async fn steady_ingest_keeps_the_wal_bounded() {
         trough <= 60,
         "the WAL holds only what is not yet flushed: {trough} segments at fewest, {end} at the end"
     );
+}
+
+/// An open settles the WAL, not the next write: a table opened on a long WAL
+/// and given nothing new holds only what is not yet in an SST once it is open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_trims_a_long_wal_with_no_new_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_unflushed(dir.path()).await;
+    let mut next = 0;
+    for _ in 0..300 {
+        db.ingest(batch(next, 200)).await.unwrap();
+        next += 200;
+    }
+    drop(db);
+    let long = wal_segments(dir.path());
+    assert!(long > 50, "the WAL holds every write: {long} segments");
+
+    // No writes after this open: it alone trims the WAL.
+    let db = open(dir.path()).await;
+    assert_eq!(rows(&db).await, next as usize, "every row is readable");
+    assert_eq!(
+        wal_segments(dir.path()),
+        1,
+        "the open flushed its replay and pruned the WAL of {long} segments"
+    );
+    drop(db);
+
+    // The next open has nothing to replay, and loses nothing.
+    let db = open(dir.path()).await;
+    assert_eq!(rows(&db).await, next as usize, "every row survives");
+    assert_eq!(wal_segments(dir.path()), 1);
 }

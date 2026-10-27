@@ -31,7 +31,7 @@ use crate::{
         bootstrap::{ensure_manifest_dirs, init_fs_manifest},
     },
     mode::{DynModeConfig, table_definition},
-    ondisk::sstable::SsTableConfig,
+    ondisk::sstable::{SsTableConfig, SsTableError},
     transaction::CommitAckMode,
     wal::{
         WalConfig as RuntimeWalConfig, WalError, WalExt, WalRecoveryMode, WalSyncPolicy,
@@ -485,6 +485,9 @@ pub enum DbBuildError {
     /// WAL configuration or recovery failed during builder orchestration.
     #[error(transparent)]
     Wal(#[from] WalError),
+    /// Flushing what an open replayed from the WAL into an SST failed.
+    #[error(transparent)]
+    Flush(#[from] SsTableError),
     /// Filesystem layout preparation failed.
     #[error("failed to prepare directory `{path}`: {source}")]
     PreparePath {
@@ -1776,6 +1779,7 @@ where
                 inner.compaction_metrics = options.metrics();
             }
             inner.enable_wal(wal_cfg).await?;
+            inner.flush_replayed().await?;
             if let (Some(options), Some((sst_config, id_allocator))) =
                 (compaction_options, compaction_state)
             {

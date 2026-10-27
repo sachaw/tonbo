@@ -169,7 +169,7 @@ where
         Ok(())
     }
 
-    fn seal_mutable_now(&self) -> Result<(), KeyExtractError> {
+    pub(crate) fn seal_mutable_now(&self) -> Result<(), KeyExtractError> {
         if let Some(seg) = self.mem.seal_now()? {
             self.seal_into_immutable(seg);
             let mut seal = self.seal_state_lock();

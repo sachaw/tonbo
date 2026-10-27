@@ -232,7 +232,8 @@ async fn wal_gc_respects_pinned_segments() -> Result<(), Box<dyn std::error::Err
         db.num_immutable_segments() >= 1,
         "expected pending mutable to seal before final flush"
     );
-    let descriptor_b = SsTableDescriptor::new(SsTableId::new(2), 0);
+    // Not 2: the reopen above flushed what it replayed into SST 2.
+    let descriptor_b = SsTableDescriptor::new(SsTableId::new(3), 0);
     db.flush_immutables_with_descriptor(Arc::clone(&sst_cfg), descriptor_b)
         .await?;
     db.prune_wal_segments_below_floor().await;

@@ -326,6 +326,16 @@ impl MinorCompactionState {
             .maybe_compact(db, Arc::clone(&self.config))
             .await
     }
+
+    async fn flush<FS, E>(&self, db: &DbInner<FS, E>) -> Result<SsTable, SsTableError>
+    where
+        FS: ManifestFs<E>,
+        E: Executor + Timer + Clone,
+        <FS as fusio::fs::Fs>::File: fusio::durability::FileCommit,
+    {
+        let _guard = self.lock.lock().await;
+        self.compactor.flush(db, Arc::clone(&self.config)).await
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1629,6 +1639,28 @@ where
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// Put what an open replayed from the WAL into an SST, and trim the WAL to
+    /// what is left: nothing.
+    ///
+    /// The WAL holds only what is not yet in an SST, and an open is where that
+    /// is settled, not the next write. Without this an idle table kept its replay
+    /// in memory and its WAL on disk until data came in, and a floor published
+    /// behind what was flushed (as one could be before the floor was exact) was
+    /// replayed in full by every open. A table without minor compaction has no
+    /// SST to flush into: its WAL is its store, and is left as it is.
+    pub(crate) async fn flush_replayed(&self) -> Result<(), DbBuildError> {
+        let Some(minor) = &self.minor_compaction else {
+            return Ok(());
+        };
+        self.seal_mutable_now()?;
+        if self.num_immutable_segments() > 0 {
+            minor.flush(self).await?;
+        } else {
+            self.prune_wal_segments_below_floor().await;
+        }
+        Ok(())
     }
 
     async fn manifest_wal_floor(&self) -> Option<WalSegmentRef> {
