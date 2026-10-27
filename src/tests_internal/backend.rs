@@ -84,7 +84,7 @@ pub fn local_harness(
         wal_config,
         cleanup: Some(Box::new(move || {
             if let Err(err) = std::fs::remove_dir_all(&root) {
-                eprintln!("cleanup failed for {:?}: {err}", &root);
+                eprintln!("cleanup failed for {:?}: {err}", root);
             }
         })),
     })

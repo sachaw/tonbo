@@ -174,7 +174,7 @@ async fn durability_restart_via_public_compaction_path() -> Result<(), Box<dyn s
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean test dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean test dir {:?}: {err}", temp_root);
     }
 
     Ok(())
@@ -244,7 +244,7 @@ async fn durability_restart_via_wal_only() -> Result<(), Box<dyn std::error::Err
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean test dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean test dir {:?}: {err}", temp_root);
     }
 
     Ok(())

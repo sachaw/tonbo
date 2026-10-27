@@ -2111,7 +2111,7 @@ async fn sweep_manifest_ssts_reclaims_obsolete_candidate_after_snapshot_pin_drop
     );
 
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean temp dir {:?}: {err}", root_dir);
     }
 
     Ok(())

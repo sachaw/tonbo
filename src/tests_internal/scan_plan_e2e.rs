@@ -108,7 +108,7 @@ async fn plan_execute_scan_merges_layers_with_residuals() -> Result<(), Box<dyn 
 
     // Cleanup best-effort.
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
 
     Ok(())

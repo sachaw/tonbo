@@ -120,7 +120,7 @@ async fn snapshot_at_reads_older_manifest_version() -> Result<(), Box<dyn std::e
     );
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
     Ok(())
 }

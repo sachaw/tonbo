@@ -123,7 +123,7 @@ async fn wal_recovers_rows_across_restart() -> Result<(), Box<dyn std::error::Er
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean test dir {:?}: {err}", root_dir);
     }
 
     Ok(())
@@ -241,7 +241,7 @@ async fn flush_then_restart_replays_via_manifest_and_wal() -> Result<(), Box<dyn
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean test dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean test dir {:?}: {err}", temp_root);
     }
 
     Ok(())
@@ -336,7 +336,7 @@ async fn wal_recovers_composite_keys_in_order() -> Result<(), Box<dyn std::error
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean test dir {:?}: {err}", root_dir);
     }
 
     Ok(())
@@ -452,7 +452,7 @@ async fn wal_replay_emits_delete_frames_for_tombstones() -> Result<(), Box<dyn s
     assert!(matches!(events[2], WalEvent::TxnCommit { .. }));
 
     if let Err(err) = fs::remove_dir_all(&dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &dir);
+        eprintln!("failed to clean test dir {:?}: {err}", dir);
     }
     Ok(())
 }
@@ -518,7 +518,7 @@ async fn wal_recovery_preserves_deletes() -> Result<(), Box<dyn std::error::Erro
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean test dir {:?}: {err}", root_dir);
     }
 
     Ok(())
@@ -615,7 +615,7 @@ async fn wal_recovery_survives_segment_rotations() -> Result<(), Box<dyn std::er
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean test dir {:?}: {err}", root_dir);
     }
 
     Ok(())
@@ -702,7 +702,7 @@ async fn wal_reenable_seeds_provisional_sequence() -> Result<(), Box<dyn std::er
 
     recovered.disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&root_dir) {
-        eprintln!("failed to clean test dir {:?}: {err}", &root_dir);
+        eprintln!("failed to clean test dir {:?}: {err}", root_dir);
     }
 
     Ok(())

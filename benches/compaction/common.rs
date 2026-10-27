@@ -621,7 +621,7 @@ impl IoProbe {
 }
 
 fn saturating_add(counter: &AtomicU64, delta: u64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(delta))
     });
 }

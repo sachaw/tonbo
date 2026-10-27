@@ -145,7 +145,7 @@ async fn compaction_gc_prunes_obsolete_wal_and_preserves_visible_rows()
 
     recovered.into_inner().disable_wal().await?;
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
 
     Ok(())

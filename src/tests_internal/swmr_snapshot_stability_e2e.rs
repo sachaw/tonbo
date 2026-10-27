@@ -332,7 +332,7 @@ async fn swmr_snapshot_stability_survives_writes_and_compaction()
     );
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
     Ok(())
 }
@@ -392,7 +392,7 @@ async fn swmr_manifest_version_timestamp_is_not_a_safe_pinned_snapshot_substitut
     );
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
     Ok(())
 }
@@ -476,7 +476,7 @@ async fn swmr_pinned_snapshot_shape_fingerprint_stays_stable()
     assert_eq!(pinned_warm_after, pinned_warm_before);
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
     Ok(())
 }
@@ -554,7 +554,7 @@ async fn swmr_head_reader_shape_checks_match_workload_contract()
     assert_eq!(head_heavy_after, head_heavy_before);
 
     if let Err(err) = fs::remove_dir_all(&temp_root) {
-        eprintln!("failed to clean temp dir {:?}: {err}", &temp_root);
+        eprintln!("failed to clean temp dir {:?}: {err}", temp_root);
     }
     Ok(())
 }
