@@ -115,7 +115,11 @@ pub(crate) fn fingerprint_schema(schema: &SchemaRef) -> String {
     let bytes =
         serde_json::to_vec(&canonical).expect("canonical schema serialization should not fail");
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn canonicalize_json(value: Value) -> Value {
